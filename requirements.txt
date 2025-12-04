@@ -26,10 +26,10 @@ django-tailwind==3.6.0
 django-cors-headers==4.4.0
 python-dotenv==1.0.1
 tenacity==8.3.0
-pdfminer.six==20231228\r
-python-docx==1.1.2\r
-# SQLAlchemy==2.0.32\r
-# pandas==2.2.2\r
-# FastAPI and Uvicorn for email notification API\r
-fastapi==0.104.1\r
-uvicorn[standard]==0.24.0\r
+pdfminer.six==20231228
+python-docx==1.1.2
+# SQLAlchemy==2.0.32
+# pandas==2.2.2
+# FastAPI and Uvicorn for email notification API
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
