@@ -263,11 +263,13 @@ def build_multi_lead_email_template(
       margin-top: 10px;
       font-size: 24px;
       font-weight: 700;
+      color:#ef4444;
     }}
     .sub {{
       margin-top: 6px;
       font-size: 14px;
       opacity: 0.9;
+      color:#ef4444;
     }}
     .body {{
       padding: 24px 32px 32px;
