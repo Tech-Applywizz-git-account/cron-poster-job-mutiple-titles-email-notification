@@ -91,18 +91,30 @@ def get_all_leads_below_threshold(threshold: int = 60, target_date: Optional[str
         with conn.cursor(cursor_factory=RealDictCursor) as cursor:
             query = """
                 SELECT 
-                    l.name as lead_name,
-                    l.email as lead_email,
-                    l."apwId" as apw_id,
-                    COUNT(sj.id) as job_count_today,
-                    %s - COUNT(sj.id) as difference
+                    l.name AS lead_name,
+                    l.email AS lead_email,
+                    l."apwId" AS apw_id,
+                    jr.name AS job_role_name,
+                    COUNT(sj.id) AS job_count_today,
+                    -- difference calculation
+                    60 - COUNT(sj.id) AS difference,
+                    -- service type based on servicesOpted JSONB
+                    CASE 
+                        WHEN l."servicesOpted" @> '["applications"]'::jsonb 
+                            THEN 'Opted for Applications'
+                        WHEN l."servicesOpted" @> '["job-links"]'::jsonb 
+                            THEN 'Opted for Job Links'
+                        ELSE 'Not Selected'
+                    END AS service_type
                 FROM karmafy_lead l
+                LEFT JOIN karmafy_jobrole jr 
+                    ON jr.id = l."targetRoleId_id"
                 LEFT JOIN karmafy_scoredjob sj 
                     ON sj.lead_id = l.id
-                    AND DATE(sj."generatedAt") = %s
+                    AND DATE(sj."generatedAt") = CURRENT_DATE
                 WHERE LOWER(l.status) IN ('active', 'in progress', 'inprogress')
-                GROUP BY l.id, l.name, l.email, l."apwId"
-                HAVING COUNT(sj.id) < %s
+                GROUP BY l.id, l.name, l.email, l."apwId", jr.name, l."servicesOpted"
+                HAVING COUNT(sj.id) < 60
                 ORDER BY job_count_today ASC
             """
             cursor.execute(query, (threshold, target_date, threshold))
@@ -218,6 +230,8 @@ def build_multi_lead_email_template(
         job_count = lead.get('job_count_today', 0)
         difference = lead.get('difference', 0)
         apw_id = lead.get('apw_id', 'N/A') or 'N/A'
+        job_role_name = lead.get('job_role_name', 'N/A') or 'N/A'
+        service_type = lead.get('service_type', 'Not Selected')
         
         leads_rows += f"""
         <tr style="border-bottom: 1px solid #e5e7eb;">
@@ -225,6 +239,8 @@ def build_multi_lead_email_template(
             <td style="padding: 12px 8px; color: #111827; font-weight: 600;">{lead_name}</td>
             <td style="padding: 12px 8px; color: #4b5563; font-family: ui-monospace, monospace; font-size: 13px;">{lead_email}</td>
             <td style="padding: 12px 8px; text-align: center; color: #6b7280;">{apw_id}</td>
+            <td style="padding: 12px 8px; color: #5b21b6; font-weight: 600;">{job_role_name}</td>
+            <td style="padding: 12px 8px; color: #059669; font-weight: 600;">{service_type}</td>
             <td style="padding: 12px 8px; text-align: center; font-weight: 700; color: #e11d48;">{job_count}</td>
             <td style="padding: 12px 8px; text-align: center; color: #6b7280;">{threshold}</td>
             <td style="padding: 12px 8px; text-align: center; font-weight: 700; color: #dc2626;">-{difference}</td>
@@ -303,7 +319,7 @@ def build_multi_lead_email_template(
       color: #6b7280;
       border-bottom: 2px solid #e5e7eb;
     }}
-    th:nth-child(1), th:nth-child(4), th:nth-child(5), th:nth-child(6), th:nth-child(7) {{
+    th:nth-child(1), th:nth-child(4), th:nth-child(7), th:nth-child(8), th:nth-child(9) {{
       text-align: center;
     }}
     .footer {{
@@ -352,6 +368,8 @@ def build_multi_lead_email_template(
             <th>Lead Name</th>
             <th>Email</th>
             <th>APW ID</th>
+            <th>Job Role</th>
+            <th>Service Opted</th>
             <th>Job Links</th>
             <th>Threshold</th>
             <th>Shortfall</th>
