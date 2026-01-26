@@ -44,7 +44,7 @@ if not DATABASE_URL:
 APP_NAME = "LinkedIn Job Postings Report"
 
 # Email recipient for job postings report
-TEST_EMAIL_RECIPIENT = "bhanutejathouti@gmail.com"
+TEST_EMAIL_RECIPIENT = "ramakrishna@applywizz.com"
 
 # CC Recipients - comma-separated list of email addresses
 # Can be set via environment variable: CC_EMAIL_RECIPIENTS="email1@example.com,email2@example.com"
