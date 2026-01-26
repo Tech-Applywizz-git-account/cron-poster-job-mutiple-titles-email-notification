@@ -41,11 +41,10 @@ if not DATABASE_URL:
         "Please set it in your .env file."
     )
 
-APP_NAME = "Task Management"
+APP_NAME = "LinkedIn Job Postings Report"
 
-# Job Links Threshold
-JOB_LINKS_THRESHOLD = 60
-TEST_EMAIL_RECIPIENT = "ramakrishna@applywizz.com"
+# Email recipient for job postings report
+TEST_EMAIL_RECIPIENT = "bhanutejathouti@gmail.com"
 
 # CC Recipients - comma-separated list of email addresses
 # Can be set via environment variable: CC_EMAIL_RECIPIENTS="email1@example.com,email2@example.com"
@@ -70,17 +69,17 @@ def get_db_connection():
 
 
 # -----------------------
-# Query All Leads Below Threshold
+# Query LinkedIn Job Postings
 # -----------------------
-def get_all_leads_below_threshold(threshold: int = 60, target_date: Optional[str] = None):
+def get_linkedin_job_postings(target_date: Optional[str] = None):
     """
-    Query the karmafy_scoredjob table to find ALL leads with job count below threshold for a specific date.
+    Query the karmafy_job table to find all LinkedIn job postings for a specific date
+    that have a poster profile.
     
     Args:
-        threshold: The minimum job count threshold
         target_date: Date in 'YYYY-MM-DD' format. Defaults to today's date if not provided.
     
-    Returns list of dicts with lead info and job count for the specified date.
+    Returns list of dicts with job posting information.
     """
     conn = get_db_connection()
     try:
@@ -91,34 +90,20 @@ def get_all_leads_below_threshold(threshold: int = 60, target_date: Optional[str
         with conn.cursor(cursor_factory=RealDictCursor) as cursor:
             query = """
                 SELECT 
-                    l.name AS lead_name,
-                    l.email AS lead_email,
-                    l."apwId" AS apw_id,
-                    l."yearsExp" AS years_exp,
-                    jr.name AS job_role_name,
-                    COUNT(sj.id) AS job_count_today,
-                    -- difference calculation
-                    60 - COUNT(sj.id) AS difference,
-                    -- service type based on servicesOpted JSONB
-                    CASE 
-                        WHEN l."servicesOpted" @> '["applications"]'::jsonb 
-                            THEN 'Opted for Applications'
-                        WHEN l."servicesOpted" @> '["job-links"]'::jsonb 
-                            THEN 'Opted for Job Links'
-                        ELSE 'Not Selected'
-                    END AS service_type
-                FROM karmafy_lead l
-                LEFT JOIN karmafy_jobrole jr 
-                    ON jr.id = l."targetRoleId_id"
-                LEFT JOIN karmafy_scoredjob sj 
-                    ON sj.lead_id = l.id
-                    AND DATE(sj."generatedAt") = CURRENT_DATE
-                WHERE LOWER(l.status) IN ('active', 'in progress', 'inprogress')
-                GROUP BY l.id, l.name, l.email, l."apwId", l."yearsExp", jr.name, l."servicesOpted"
-                HAVING COUNT(sj.id) < 60
-                ORDER BY job_count_today ASC
+                    company,
+                    url,
+                    company_url,
+                    poster_full_name,
+                    posted_by_profile,
+                    source,
+                    title
+                FROM public.karmafy_job
+                WHERE source = 'LINKEDIN'
+                    AND DATE("datePosted") = CURRENT_DATE
+                    AND posted_by_profile != ''
+                ORDER BY company, title
             """
-            cursor.execute(query, (threshold, target_date, threshold))
+            cursor.execute(query)
             results = cursor.fetchall()
             
             # Convert to list of dicts
@@ -215,38 +200,37 @@ def send_mail_via_graph(to: str, subject: str, html: str, cc: Optional[list] = N
         raise HTTPException(status_code=500, detail="Failed to send email via Microsoft Graph")
 
 
-def build_multi_lead_email_template(
+def build_job_postings_email_template(
     app_name: str,
-    leads_data: list,
-    threshold: int,
+    jobs_data: list,
     support_url: str = "https://dashboard.apply-wizz.com/",
 ) -> str:
-    """Build the HTML email template with multiple leads' job links data"""
+    """Build the HTML email template with LinkedIn job postings data"""
     
-    # Build table rows for all leads
-    leads_rows = ""
-    for idx, lead in enumerate(leads_data, 1):
-        lead_name = lead.get('lead_name', 'Unknown')
-        lead_email = lead.get('lead_email', 'N/A')
-        job_count = lead.get('job_count_today', 0)
-        difference = lead.get('difference', 0)
-        apw_id = lead.get('apw_id', 'N/A') or 'N/A'
-        years_exp = lead.get('years_exp', 'N/A') or 'N/A'
-        job_role_name = lead.get('job_role_name', 'N/A') or 'N/A'
-        service_type = lead.get('service_type', 'Not Selected')
+    # Build table rows for all job postings
+    jobs_rows = ""
+    for idx, job in enumerate(jobs_data, 1):
+        company = job.get('company', 'N/A') or 'N/A'
+        title = job.get('title', 'N/A') or 'N/A'
+        url = job.get('url', '#') or '#'
+        company_url = job.get('company_url', '#') or '#'
+        poster_full_name = job.get('poster_full_name', 'N/A') or 'N/A'
+        posted_by_profile = job.get('posted_by_profile', '#') or '#'
+        source = job.get('source', 'N/A') or 'N/A'
         
-        leads_rows += f"""
+        jobs_rows += f"""
         <tr style="border-bottom: 1px solid #e5e7eb;">
-            <td style="padding: 10px 6px; text-align: center; color: #6b7280; font-weight: 600; font-size: 13px;">{idx}</td>
-            <td style="padding: 10px 6px; color: #111827; font-weight: 600; font-size: 13px;">{lead_name}</td>
-            <td style="padding: 10px 6px; color: #4b5563; font-family: ui-monospace, monospace; font-size: 12px;">{lead_email}</td>
-            <td style="padding: 10px 6px; text-align: center; color: #6b7280; font-size: 13px;">{apw_id}</td>
-            <td style="padding: 10px 6px; text-align: center; color: #2563eb; font-weight: 600; font-size: 13px;">{years_exp}</td>
-            <td style="padding: 10px 6px; color: #5b21b6; font-weight: 600; font-size: 13px;">{job_role_name}</td>
-            <td style="padding: 10px 6px; color: #059669; font-weight: 600; font-size: 13px;">{service_type}</td>
-            <td style="padding: 10px 6px; text-align: center; font-weight: 700; color: #e11d48; font-size: 13px;">{job_count}</td>
-            <td style="padding: 10px 6px; text-align: center; color: #6b7280; font-size: 13px;">{threshold}</td>
-            <td style="padding: 10px 6px; text-align: center; font-weight: 700; color: #dc2626; font-size: 13px;">-{difference}</td>
+            <td style="padding: 10px 8px; text-align: center; color: #6b7280; font-weight: 600; font-size: 13px;">{idx}</td>
+            <td style="padding: 10px 8px; color: #111827; font-weight: 600; font-size: 13px;">
+                <a href="{company_url}" target="_blank" style="color: #2563eb; text-decoration: none;">{company}</a>
+            </td>
+            <td style="padding: 10px 8px; color: #111827; font-size: 13px;">
+                <a href="{url}" target="_blank" style="color: #059669; text-decoration: none; font-weight: 500;">{title}</a>
+            </td>
+            <td style="padding: 10px 8px; color: #5b21b6; font-weight: 600; font-size: 13px;">
+                <a href="{posted_by_profile}" target="_blank" style="color: #5b21b6; text-decoration: none;">{poster_full_name}</a>
+            </td>
+            <td style="padding: 10px 8px; text-align: center; color: #6b7280; font-size: 12px; text-transform: uppercase;">{source}</td>
         </tr>
         """
     
@@ -254,7 +238,7 @@ def build_multi_lead_email_template(
 <html lang="en">
 <head>
   <meta charSet="UTF-8" />
-  <title>{app_name} – Job Links Threshold Alert</title>
+  <title>{app_name} – Daily Report</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
     body {{
@@ -273,7 +257,7 @@ def build_multi_lead_email_template(
       box-shadow: 0 18px 45px rgba(15, 23, 42, 0.12);
     }}
     .header {{
-      background: #fef2f2;
+      background: linear-gradient(135deg, #0a66c2, #0077b5);
       padding: 24px 32px;
       color: white;
       text-align: left;
@@ -282,22 +266,22 @@ def build_multi_lead_email_template(
       margin-top: 10px;
       font-size: 24px;
       font-weight: 700;
-      color:#ef4444;
+      color: white;
     }}
     .sub {{
       margin-top: 6px;
       font-size: 14px;
       opacity: 0.9;
-      color:#ef4444;
+      color: white;
     }}
     .body {{
       padding: 24px 32px 32px;
       font-size: 14px;
       line-height: 1.6;
     }}
-    .alert-box {{
-      background-color: #fef2f2;
-      border-left: 4px solid #ef4444;
+    .info-box {{
+      background-color: #eff6ff;
+      border-left: 4px solid #0a66c2;
       padding: 16px;
       margin: 20px 0;
       border-radius: 8px;
@@ -308,7 +292,7 @@ def build_multi_lead_email_template(
     }}
     table {{
       width: 100%;
-      min-width: 1000px;
+      min-width: 800px;
       border-collapse: collapse;
       background: white;
       border: 1px solid #e5e7eb;
@@ -317,7 +301,7 @@ def build_multi_lead_email_template(
     }}
     th {{
       background: #f9fafb;
-      padding: 10px 6px;
+      padding: 12px 8px;
       text-align: left;
       font-weight: 700;
       font-size: 11px;
@@ -328,14 +312,14 @@ def build_multi_lead_email_template(
       white-space: nowrap;
     }}
     td {{
-      padding: 10px 6px;
+      padding: 10px 8px;
       font-size: 13px;
       border-bottom: 1px solid #f3f4f6;
     }}
-    th:nth-child(1), th:nth-child(4), th:nth-child(5), th:nth-child(8), th:nth-child(9), th:nth-child(10) {{
+    th:nth-child(1), th:nth-child(5) {{
       text-align: center;
     }}
-    td:nth-child(1), td:nth-child(4), td:nth-child(5), td:nth-child(8), td:nth-child(9), td:nth-child(10) {{
+    td:nth-child(1), td:nth-child(5) {{
       text-align: center;
     }}
     .footer {{
@@ -348,65 +332,67 @@ def build_multi_lead_email_template(
       display: inline-block;
       margin-top: 18px;
       padding: 12px 24px;
-      background: linear-gradient(135deg, #e11d48, #f59e0b);
+      background: linear-gradient(135deg, #0a66c2, #0077b5);
       color: white !important;
       text-decoration: none;
       border-radius: 999px;
       font-weight: 600;
       font-size: 14px;
     }}
+    a {{
+      color: #0a66c2;
+      text-decoration: none;
+    }}
+    a:hover {{
+      text-decoration: underline;
+    }}
   </style>
 </head>
 <body>
   <div class="container">
     <div class="header">
-      <div class="title">⚠️ Job Links Below Threshold Alert</div>
+      <div class="title">📊 LinkedIn Job Postings Report</div>
       <div class="sub">
-        {len(leads_data)} lead(s) have received fewer than {threshold} job links
+        {len(jobs_data)} job posting(s) found with poster profiles
       </div>
     </div>
     <div class="body">
       <p>Hi Team,</p>
       <p>
-        This is an automated alert to inform you that <strong>{len(leads_data)} lead(s)</strong> currently have job links below the expected threshold of <strong>{threshold}</strong>.
+        This is your daily automated report of <strong>{len(jobs_data)} LinkedIn job posting(s)</strong> posted today that include poster profile information.
       </p>
 
-      <div class="alert-box">
-        <strong>⚠️ Action Required:</strong> Please review these leads and ensure they are receiving adequate job matches.
+      <div class="info-box">
+        <strong>ℹ️ Report Details:</strong> This report includes all LinkedIn jobs posted today where the poster's profile is available.
       </div>
 
-      <h3 style="color: #111827; margin-top: 24px;">Leads Below Threshold</h3>
+      <h3 style="color: #111827; margin-top: 24px;">Today's Job Postings</h3>
       
       <div class="table-wrapper">
         <table>
           <thead>
             <tr>
               <th>#</th>
-              <th>Lead Name</th>
-              <th>Email</th>
-              <th>APW ID</th>
-              <th>Years Exp</th>
-              <th>Job Role</th>
-              <th>Service Opted</th>
-              <th>Job Links</th>
-              <th>Threshold</th>
-              <th>Shortfall</th>
+              <th>Company</th>
+              <th>Job Title</th>
+              <th>Posted By</th>
+              <th>Source</th>
             </tr>
           </thead>
           <tbody>
-            {leads_rows}
+            {jobs_rows}
           </tbody>
         </table>
       </div>
 
       <p style="margin-top: 24px; color: #6b7280; font-size: 13px;">
-        <strong>Suggested Actions:</strong>
+        <strong>Quick Stats:</strong>
       </p>
       <ul style="color: #6b7280; font-size: 13px;">
-        <li>Review lead profiles and scoring criteria</li>
-        <li>Check if job sources are providing adequate matches</li>
-        <li>Consider adjusting target role parameters</li>
-        <li>Verify lead preferences and requirements</li>
+        <li>Total job postings: {len(jobs_data)}</li>
+        <li>All postings are from LinkedIn</li>
+        <li>All postings include poster profile information</li>
+        <li>Posted date: {datetime.now().strftime('%Y-%m-%d')}</li>
       </ul>
 
       <a href="{support_url}" class="cta-button" target="_blank" rel="noopener noreferrer">
@@ -414,11 +400,11 @@ def build_multi_lead_email_template(
       </a>
 
       <p style="margin-top: 24px; color: #9ca3af; font-size: 12px;">
-        This is an automated notification from {app_name}. Generated on {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}.
+        This is an automated notification from {app_name}. Generated on {datetime.now().strftime('%Y-%m-%d %H:%M IST')}.
       </p>
     </div>
     <div class="footer">
-      © {datetime.utcnow().year} {app_name}. All rights reserved.
+      © {datetime.now().year} {app_name}. All rights reserved.
     </div>
   </div>
 </body>
@@ -428,36 +414,34 @@ def build_multi_lead_email_template(
     return html
 
 # -----------------------
-# NEW ENDPOINT: Check ALL leads below threshold
+# NEW ENDPOINT: Get LinkedIn Job Postings
 # -----------------------
-@app.post("/check-all-leads-threshold")
-def check_all_leads_threshold():
+@app.post("/get-linkedin-jobs")
+def get_linkedin_jobs():
     """
-    Check ALL leads in the database and find those below threshold.
-    Send ONE email with a summary of all leads below threshold.
+    Get all LinkedIn job postings from today that have poster profiles.
+    Send ONE email with a summary of all job postings.
     """
-    # Query database for all leads below threshold
-    leads_below_threshold = get_all_leads_below_threshold(JOB_LINKS_THRESHOLD)
+    # Query database for LinkedIn job postings
+    job_postings = get_linkedin_job_postings()
     
-    if not leads_below_threshold:
+    if not job_postings:
         return {
             "success": True,
-            "message": "All leads are above threshold!",
-            "leads_count": 0,
-            "threshold": JOB_LINKS_THRESHOLD,
+            "message": "No LinkedIn job postings found for today!",
+            "jobs_count": 0,
             "email_sent": False
         }
     
-    # Build email with all leads information
-    subject = f"{APP_NAME} Alert: {len(leads_below_threshold)} Lead(s) Below Job Links Threshold"
+    # Build email with all job postings information
+    subject = f"{APP_NAME}: {len(job_postings)} LinkedIn Job Posting(s) - {datetime.now().strftime('%Y-%m-%d')}"
     
-    html = build_multi_lead_email_template(
+    html = build_job_postings_email_template(
         app_name=APP_NAME,
-        leads_data=leads_below_threshold,
-        threshold=JOB_LINKS_THRESHOLD,
+        jobs_data=job_postings,
     )
     
-    # Send email with all leads information (with CC)
+    # Send email with all job postings information (with CC)
     send_mail_via_graph(
         to=TEST_EMAIL_RECIPIENT,
         subject=subject,
@@ -465,20 +449,18 @@ def check_all_leads_threshold():
         cc=CC_EMAIL_RECIPIENTS,
     )
     
-    print(f"✅ Batch threshold alert email sent to {TEST_EMAIL_RECIPIENT}")
-    print(f"   Total leads below threshold: {len(leads_below_threshold)}")
-    print(f"   Threshold: {JOB_LINKS_THRESHOLD}")
-    for lead in leads_below_threshold[:5]:  # Print first 5
-        print(f"   - {lead['lead_name']} ({lead['job_count_today']} job links)")
-    if len(leads_below_threshold) > 5:
-        print(f"   ... and {len(leads_below_threshold) - 5} more")
+    print(f"✅ LinkedIn job postings email sent to {TEST_EMAIL_RECIPIENT}")
+    print(f"   Total job postings: {len(job_postings)}")
+    for job in job_postings[:5]:  # Print first 5
+        print(f"   - {job['company']}: {job['title']}")
+    if len(job_postings) > 5:
+        print(f"   ... and {len(job_postings) - 5} more")
     
     return {
         "success": True,
-        "message": f"Found {len(leads_below_threshold)} lead(s) below threshold - batch notification email sent",
-        "leads_count": len(leads_below_threshold),
-        "threshold": JOB_LINKS_THRESHOLD,
-        "leads": leads_below_threshold,
+        "message": f"Found {len(job_postings)} LinkedIn job posting(s) - email sent",
+        "jobs_count": len(job_postings),
+        "jobs": job_postings,
         "email_sent": True,
         "email_sent_to": TEST_EMAIL_RECIPIENT
     }
@@ -487,16 +469,16 @@ def check_all_leads_threshold():
 # Health check endpoint
 @app.get("/")
 def health_check():
-    return {"status": "ok", "service": "Job Links Threshold Notification API"}
+    return {"status": "ok", "service": "LinkedIn Job Postings Notification API"}
 
 
 # -----------------------
 # Main execution when run as script (for cron jobs)
 # -----------------------
 if __name__ == "__main__":
-    print("🚀 Starting email notification check...")
+    print("🚀 Starting LinkedIn job postings check...")
     try:
-        result = check_all_leads_threshold()
+        result = get_linkedin_jobs()
         print(f"✅ Execution completed successfully!")
         print(f"Result: {result}")
     except Exception as e:
