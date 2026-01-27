@@ -1,6 +1,33 @@
 
-# Ignore virtual environment directory
-venv/
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
 
-# Ignore .env file
+# Virtual environment
+venv/
+env/
+ENV/
+
+# Environment variables
 .env
+.env.local
+
+# Excel exports (generated files)
+exports/
+*.xlsx
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

@@ -7,6 +7,8 @@ import os
 from datetime import datetime
 import psycopg2
 from psycopg2.extras import RealDictCursor
+import pandas as pd
+import base64
 
 # -----------------------
 # Config - Load from environment variables
@@ -45,11 +47,14 @@ APP_NAME = "LinkedIn Job Postings Report"
 
 # Email recipient for job postings report
 TEST_EMAIL_RECIPIENT = "ramakrishna@applywizz.com"
-
 # CC Recipients - comma-separated list of email addresses
 # Can be set via environment variable: CC_EMAIL_RECIPIENTS="email1@example.com,email2@example.com"
 CC_RECIPIENTS_STR = os.getenv("CC_EMAIL_RECIPIENTS", "")
 CC_EMAIL_RECIPIENTS = [email.strip() for email in CC_RECIPIENTS_STR.split(",") if email.strip()]
+
+# Excel exports directory
+EXPORTS_DIR = Path(__file__).parent / "exports"
+EXPORTS_DIR.mkdir(exist_ok=True)
 
 # FastAPI app
 app = FastAPI()
@@ -147,7 +152,7 @@ def get_access_token() -> str:
 # -----------------------
 # Send mail via Graph
 # -----------------------
-def send_mail_via_graph(to: str, subject: str, html: str, cc: Optional[list] = None) -> None:
+def send_mail_via_graph(to: str, subject: str, html: str, cc: Optional[list] = None, attachment_path: Optional[str] = None) -> None:
     """
     Send email via Microsoft Graph API.
     
@@ -156,6 +161,7 @@ def send_mail_via_graph(to: str, subject: str, html: str, cc: Optional[list] = N
         subject: Email subject
         html: HTML email content
         cc: Optional list of CC email addresses
+        attachment_path: Optional path to file to attach
     """
     access_token = get_access_token()
 
@@ -184,6 +190,39 @@ def send_mail_via_graph(to: str, subject: str, html: str, cc: Optional[list] = N
         payload["message"]["ccRecipients"] = [
             {"emailAddress": {"address": email}} for email in cc
         ]
+    
+    # Add attachment if provided
+    if attachment_path and os.path.exists(attachment_path):
+        try:
+            with open(attachment_path, 'rb') as f:
+                file_content = f.read()
+            
+            # Encode to base64 - ensure no newlines or whitespace
+            file_base64 = base64.b64encode(file_content).decode('ascii')
+            filename = os.path.basename(attachment_path)
+            file_size_kb = len(file_content) / 1024
+            
+            # Check file size (Microsoft Graph has 4MB limit for inline attachments)
+            if len(file_content) > 4 * 1024 * 1024:
+                print(f"⚠️ Warning: File size ({file_size_kb:.1f} KB) exceeds 4MB limit for inline attachments")
+            
+            payload["message"]["attachments"] = [
+                {
+                    "@odata.type": "#microsoft.graph.fileAttachment",
+                    "name": filename,
+                    "contentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    "contentBytes": file_base64
+                }
+            ]
+            print(f"📎 Attachment added: {filename} ({file_size_kb:.1f} KB, base64: {len(file_base64):,} chars)")
+        except Exception as e:
+            print(f"❌ Error adding attachment: {e}")
+            raise
+    else:
+        if attachment_path:
+            print(f"⚠️ Attachment file not found: {attachment_path}")
+        else:
+            print("ℹ️ No attachment path provided")
 
     headers = {
         "Authorization": f"Bearer {access_token}",
@@ -200,12 +239,77 @@ def send_mail_via_graph(to: str, subject: str, html: str, cc: Optional[list] = N
         raise HTTPException(status_code=500, detail="Failed to send email via Microsoft Graph")
 
 
+# -----------------------
+# Export Jobs to Excel
+# -----------------------
+def export_jobs_to_excel(jobs_data: list) -> str:
+    """
+    Export job postings data to an Excel file.
+    
+    Args:
+        jobs_data: List of job posting dictionaries
+    
+    Returns:
+        Absolute file path to the generated Excel file
+    """
+    # Generate filename with timestamp
+    timestamp = datetime.now().strftime('%Y-%m-%d_%H%M%S')
+    filename = f"linkedin_jobs_{timestamp}.xlsx"
+    filepath = EXPORTS_DIR / filename
+    
+    # Prepare data for DataFrame
+    excel_data = []
+    for idx, job in enumerate(jobs_data, 1):
+        excel_data.append({
+            '#': idx,
+            'Company': job.get('company', 'N/A') or 'N/A',
+            'Job Title': job.get('title', 'N/A') or 'N/A',
+            'Posted By': job.get('poster_full_name', 'N/A') or 'N/A',
+            'Profile URL': job.get('posted_by_profile', '') or '',
+            'Job URL': job.get('url', '') or '',
+            'Company URL': job.get('company_url', '') or '',
+            'Source': job.get('source', 'N/A') or 'N/A',
+        })
+    
+    # Create DataFrame
+    df = pd.DataFrame(excel_data)
+    
+    # Export to Excel with formatting
+    with pd.ExcelWriter(filepath, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False, sheet_name='LinkedIn Jobs')
+        
+        # Get the worksheet
+        worksheet = writer.sheets['LinkedIn Jobs']
+        
+        # Auto-adjust column widths
+        for column in worksheet.columns:
+            max_length = 0
+            column_letter = column[0].column_letter
+            for cell in column:
+                try:
+                    if len(str(cell.value)) > max_length:
+                        max_length = len(str(cell.value))
+                except:
+                    pass
+            adjusted_width = min(max_length + 2, 50)  # Cap at 50 characters
+            worksheet.column_dimensions[column_letter].width = adjusted_width
+        
+        # Make header row bold
+        for cell in worksheet[1]:
+            cell.font = cell.font.copy(bold=True)
+    
+    print(f"✅ Excel file created: {filepath}")
+    return str(filepath.absolute())
+
+
+
 def build_job_postings_email_template(
     app_name: str,
     jobs_data: list,
+    excel_filepath: str,
     support_url: str = "https://dashboard.apply-wizz.com/",
 ) -> str:
-    """Build the HTML email template with LinkedIn job postings data"""
+    """Build the HTML email template with LinkedIn job postings data and Excel download link"""
     
     # Build table rows for all job postings
     jobs_rows = ""
@@ -233,6 +337,9 @@ def build_job_postings_email_template(
             <td style="padding: 10px 8px; text-align: center; color: #6b7280; font-size: 12px; text-transform: uppercase;">{source}</td>
         </tr>
         """
+    
+    # Debug: Log how many rows were generated
+    print(f"📊 Generated {len(jobs_data)} rows for email HTML table")
     
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -366,7 +473,20 @@ def build_job_postings_email_template(
         <strong>ℹ️ Report Details:</strong> This report includes all LinkedIn jobs posted today where the poster's profile is available.
       </div>
 
-      <h3 style="color: #111827; margin-top: 24px;">Today's Job Postings</h3>
+      <div style="background: linear-gradient(135deg, #0a66c2, #0077b5); padding: 24px; border-radius: 12px; margin: 24px 0; text-align: center;">
+        <h3 style="color: white; margin: 0 0 12px 0;">📎 Excel Report Attached</h3>
+        <p style="color: white; opacity: 0.95; margin: 0 0 16px 0; font-size: 14px;">
+          All {len(jobs_data)} job postings are available in the attached Excel file
+        </p>
+        <div style="display: inline-block; padding: 14px 32px; background: white; color: #0a66c2; border-radius: 999px; font-weight: 700; font-size: 15px; box-shadow: 0 4px 12px rgba(0,0,0,0.15);">
+          📊 {excel_filepath.split(chr(92))[-1] if excel_filepath else 'Excel Report'}
+        </div>
+        <p style="color: white; opacity: 0.85; margin: 12px 0 0 0; font-size: 12px;">
+          Check your email attachments to download the file
+        </p>
+      </div>
+
+      <h3 style="color: #111827; margin-top: 24px;">All Job Postings ({len(jobs_data)} Jobs)</h3>
       
       <div class="table-wrapper">
         <table>
@@ -384,6 +504,10 @@ def build_job_postings_email_template(
           </tbody>
         </table>
       </div>
+
+      <p style="margin-top: 16px; padding: 12px; background: #f0fdf4; border-left: 4px solid #10b981; color: #065f46; font-size: 13px; border-radius: 4px;">
+        ✅ <strong>Table Complete:</strong> Showing all {len(jobs_data)} job postings above (rows 1-{len(jobs_data)})
+      </p>
 
       <p style="margin-top: 24px; color: #6b7280; font-size: 13px;">
         <strong>Quick Stats:</strong>
@@ -433,20 +557,25 @@ def get_linkedin_jobs():
             "email_sent": False
         }
     
+    # Export jobs to Excel
+    excel_filepath = export_jobs_to_excel(job_postings)
+    
     # Build email with all job postings information
     subject = f"{APP_NAME}: {len(job_postings)} LinkedIn Job Posting(s) - {datetime.now().strftime('%Y-%m-%d')}"
     
     html = build_job_postings_email_template(
         app_name=APP_NAME,
         jobs_data=job_postings,
+        excel_filepath=excel_filepath,
     )
     
-    # Send email with all job postings information (with CC)
+    # Send email with all job postings information (with CC and Excel attachment)
     send_mail_via_graph(
         to=TEST_EMAIL_RECIPIENT,
         subject=subject,
         html=html,
         cc=CC_EMAIL_RECIPIENTS,
+        attachment_path=excel_filepath,
     )
     
     print(f"✅ LinkedIn job postings email sent to {TEST_EMAIL_RECIPIENT}")
@@ -458,11 +587,12 @@ def get_linkedin_jobs():
     
     return {
         "success": True,
-        "message": f"Found {len(job_postings)} LinkedIn job posting(s) - email sent",
+        "message": f"Found {len(job_postings)} LinkedIn job posting(s) - email sent with Excel report",
         "jobs_count": len(job_postings),
         "jobs": job_postings,
         "email_sent": True,
-        "email_sent_to": TEST_EMAIL_RECIPIENT
+        "email_sent_to": TEST_EMAIL_RECIPIENT,
+        "excel_file": excel_filepath
     }
 
 
