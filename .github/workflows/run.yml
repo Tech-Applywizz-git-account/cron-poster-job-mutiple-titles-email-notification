@@ -28,5 +28,4 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           # Email Configuration (Optional)
           CC_EMAIL_RECIPIENTS: ${{ secrets.CC_EMAIL_RECIPIENTS }}
-        working-directory: cron-email-notification
         run: python api_send_email_notification.py
