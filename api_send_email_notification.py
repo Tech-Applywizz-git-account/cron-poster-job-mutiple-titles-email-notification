@@ -89,7 +89,7 @@ def get_linkedin_job_postings(target_date: Optional[str] = None):
         
         with conn.cursor(cursor_factory=RealDictCursor) as cursor:
             query = """
-                SELECT 
+                SELECT DISTINCT ON (posted_by_profile)
                     company,
                     url,
                     company_url,
@@ -99,7 +99,7 @@ def get_linkedin_job_postings(target_date: Optional[str] = None):
                     title
                 FROM public.karmafy_job
                 WHERE source = 'LINKEDIN'
-                    AND DATE("datePosted") = CURRENT_DATE
+                    AND DATE("ingestedAt") = CURRENT_DATE
                     AND posted_by_profile != ''
                 ORDER BY company, title
             """
