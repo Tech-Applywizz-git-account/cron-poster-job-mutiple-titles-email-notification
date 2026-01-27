@@ -101,7 +101,7 @@ def get_linkedin_job_postings(target_date: Optional[str] = None):
                 WHERE source = 'LINKEDIN'
                     AND DATE("ingestedAt") = CURRENT_DATE
                     AND posted_by_profile != ''
-                ORDER BY company, title
+                ORDER BY posted_by_profile, company, title
             """
             cursor.execute(query)
             results = cursor.fetchall()
