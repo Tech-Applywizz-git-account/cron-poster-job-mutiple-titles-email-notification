@@ -94,19 +94,22 @@ def get_linkedin_job_postings(target_date: Optional[str] = None):
         
         with conn.cursor(cursor_factory=RealDictCursor) as cursor:
             query = """
-                SELECT DISTINCT ON (posted_by_profile)
-                    company,
-                    url,
-                    company_url,
-                    poster_full_name,
-                    posted_by_profile,
-                    source,
-                    title
-                FROM public.karmafy_job
-                WHERE source = 'LINKEDIN'
-                    AND DATE("ingestedAt") = CURRENT_DATE
-                    AND posted_by_profile != ''
-                ORDER BY posted_by_profile, company, title
+                SELECT DISTINCT ON (kj.posted_by_profile)
+                    kj.company,
+                    kj.url,
+                    kj.company_url,
+                    kj.poster_full_name,
+                    kj.posted_by_profile,
+                    kj.source,
+                    kj.title,
+                    kjr.name AS job_role
+                FROM public.karmafy_job kj
+                LEFT JOIN public.karmafy_jobrole kjr
+                    ON kj."roleId"::bigint = kjr.id
+                WHERE kj.source = 'LINKEDIN'
+                    AND DATE(kj."ingestedAt") = CURRENT_DATE
+                    AND kj.posted_by_profile != ''
+                ORDER BY kj.posted_by_profile, kj.company, kj.title
             """
             cursor.execute(query)
             results = cursor.fetchall()
@@ -264,6 +267,7 @@ def export_jobs_to_excel(jobs_data: list) -> str:
             '#': idx,
             'Company': job.get('company', 'N/A') or 'N/A',
             'Job Title': job.get('title', 'N/A') or 'N/A',
+            'Job Role': job.get('job_role', 'N/A') or 'N/A',
             'Posted By': job.get('poster_full_name', 'N/A') or 'N/A',
             'Profile URL': job.get('posted_by_profile', '') or '',
             'Job URL': job.get('url', '') or '',
@@ -316,6 +320,7 @@ def build_job_postings_email_template(
     for idx, job in enumerate(jobs_data, 1):
         company = job.get('company', 'N/A') or 'N/A'
         title = job.get('title', 'N/A') or 'N/A'
+        job_role = job.get('job_role', 'N/A') or 'N/A'
         url = job.get('url', '#') or '#'
         company_url = job.get('company_url', '#') or '#'
         poster_full_name = job.get('poster_full_name', 'N/A') or 'N/A'
@@ -331,6 +336,7 @@ def build_job_postings_email_template(
             <td style="padding: 10px 8px; color: #111827; font-size: 13px;">
                 <a href="{url}" target="_blank" style="color: #059669; text-decoration: none; font-weight: 500;">{title}</a>
             </td>
+            <td style="padding: 10px 8px; color: #dc2626; font-weight: 500; font-size: 13px;">{job_role}</td>
             <td style="padding: 10px 8px; color: #5b21b6; font-weight: 600; font-size: 13px;">
                 <a href="{posted_by_profile}" target="_blank" style="color: #5b21b6; text-decoration: none;">{poster_full_name}</a>
             </td>
@@ -495,6 +501,7 @@ def build_job_postings_email_template(
               <th>#</th>
               <th>Company</th>
               <th>Job Title</th>
+              <th>Job Role</th>
               <th>Posted By</th>
               <th>Source</th>
             </tr>
