@@ -46,7 +46,7 @@ if not DATABASE_URL:
 APP_NAME = "LinkedIn Job Postings Report"
 
 # Email recipient for job postings report
-TEST_EMAIL_RECIPIENT = "ramakrishna@applywizz.com"
+TEST_EMAIL_RECIPIENT = "bhanutejathouti@gmail.com"
 # CC Recipients - comma-separated list of email addresses
 # Can be set via environment variable: CC_EMAIL_RECIPIENTS="email1@example.com,email2@example.com"
 CC_RECIPIENTS_STR = os.getenv("CC_EMAIL_RECIPIENTS", "")
@@ -78,8 +78,8 @@ def get_db_connection():
 # -----------------------
 def get_linkedin_job_postings(target_date: Optional[str] = None):
     """
-    Query the karmafy_job table to find all LinkedIn job postings for a specific date
-    that have a poster profile.
+    Query the karmafy_job table to find all job postings from high-volume posters.
+    Returns jobs from poster profiles that have posted more than 2 jobs today.
     
     Args:
         target_date: Date in 'YYYY-MM-DD' format. Defaults to today's date if not provided.
@@ -94,22 +94,30 @@ def get_linkedin_job_postings(target_date: Optional[str] = None):
         
         with conn.cursor(cursor_factory=RealDictCursor) as cursor:
             query = """
-                SELECT DISTINCT ON (kj.posted_by_profile)
-                    kj.company,
-                    kj.url,
-                    kj.company_url,
-                    kj.poster_full_name,
-                    kj.posted_by_profile,
-                    kj.source,
-                    kj.title,
-                    kjr.name AS job_role
-                FROM public.karmafy_job kj
-                LEFT JOIN public.karmafy_jobrole kjr
-                    ON kj."roleId"::bigint = kjr.id
-                WHERE kj.source = 'LINKEDIN'
-                    AND DATE(kj."ingestedAt") = CURRENT_DATE
-                    AND kj.posted_by_profile != ''
-                ORDER BY kj.posted_by_profile, kj.company, kj.title
+                SELECT
+                    company,
+                    title,
+                    posted_by_profile,
+                    poster_full_name,
+                    url,
+                    company_url,
+                    source
+                FROM public.karmafy_job
+                WHERE "ingestedAt" >= CURRENT_DATE
+                    AND "ingestedAt" < CURRENT_DATE + INTERVAL '1 day'
+                    AND posted_by_profile IS NOT NULL
+                    AND posted_by_profile <> ''
+                    AND posted_by_profile IN (
+                        SELECT posted_by_profile
+                        FROM public.karmafy_job
+                        WHERE "ingestedAt" >= CURRENT_DATE
+                            AND "ingestedAt" < CURRENT_DATE + INTERVAL '1 day'
+                            AND posted_by_profile IS NOT NULL
+                            AND posted_by_profile <> ''
+                        GROUP BY posted_by_profile
+                        HAVING COUNT(DISTINCT title) > 2
+                    )
+                ORDER BY posted_by_profile, title
             """
             cursor.execute(query)
             results = cursor.fetchall()
@@ -267,7 +275,6 @@ def export_jobs_to_excel(jobs_data: list) -> str:
             '#': idx,
             'Company': job.get('company', 'N/A') or 'N/A',
             'Job Title': job.get('title', 'N/A') or 'N/A',
-            'Job Role': job.get('job_role', 'N/A') or 'N/A',
             'Posted By': job.get('poster_full_name', 'N/A') or 'N/A',
             'Profile URL': job.get('posted_by_profile', '') or '',
             'Job URL': job.get('url', '') or '',
@@ -320,7 +327,6 @@ def build_job_postings_email_template(
     for idx, job in enumerate(jobs_data, 1):
         company = job.get('company', 'N/A') or 'N/A'
         title = job.get('title', 'N/A') or 'N/A'
-        job_role = job.get('job_role', 'N/A') or 'N/A'
         url = job.get('url', '#') or '#'
         company_url = job.get('company_url', '#') or '#'
         poster_full_name = job.get('poster_full_name', 'N/A') or 'N/A'
@@ -336,7 +342,6 @@ def build_job_postings_email_template(
             <td style="padding: 10px 8px; color: #111827; font-size: 13px;">
                 <a href="{url}" target="_blank" style="color: #059669; text-decoration: none; font-weight: 500;">{title}</a>
             </td>
-            <td style="padding: 10px 8px; color: #dc2626; font-weight: 500; font-size: 13px;">{job_role}</td>
             <td style="padding: 10px 8px; color: #5b21b6; font-weight: 600; font-size: 13px;">
                 <a href="{posted_by_profile}" target="_blank" style="color: #5b21b6; text-decoration: none;">{poster_full_name}</a>
             </td>
@@ -466,17 +471,17 @@ def build_job_postings_email_template(
     <div class="header">
       <div class="title">📊 LinkedIn Job Postings Report</div>
       <div class="sub">
-        {len(jobs_data)} job posting(s) found with poster profiles
+        {len(jobs_data)} job posting(s) from high-volume posters (3+ jobs today)
       </div>
     </div>
     <div class="body">
       <p>Hi Team,</p>
       <p>
-        This is your daily automated report of <strong>{len(jobs_data)} LinkedIn job posting(s)</strong> posted today that include poster profile information.
+        This is your daily automated report of <strong>{len(jobs_data)} job posting(s)</strong> from high-volume posters who have posted more than 2 jobs today.
       </p>
 
       <div class="info-box">
-        <strong>ℹ️ Report Details:</strong> This report includes all LinkedIn jobs posted today where the poster's profile is available.
+        <strong>ℹ️ Report Details:</strong> This report includes all jobs from poster profiles that have posted <strong>more than 2 jobs today</strong>. These high-volume posters may be recruiters or hiring managers with multiple open positions.
       </div>
 
       <div style="background: linear-gradient(135deg, #0a66c2, #0077b5); padding: 24px; border-radius: 12px; margin: 24px 0; text-align: center;">
@@ -501,7 +506,6 @@ def build_job_postings_email_template(
               <th>#</th>
               <th>Company</th>
               <th>Job Title</th>
-              <th>Job Role</th>
               <th>Posted By</th>
               <th>Source</th>
             </tr>
@@ -521,7 +525,7 @@ def build_job_postings_email_template(
       </p>
       <ul style="color: #6b7280; font-size: 13px;">
         <li>Total job postings: {len(jobs_data)}</li>
-        <li>All postings are from LinkedIn</li>
+        <li>Filter criteria: Poster profiles with 3+ jobs posted today</li>
         <li>All postings include poster profile information</li>
         <li>Posted date: {datetime.now().strftime('%Y-%m-%d')}</li>
       </ul>
@@ -550,7 +554,7 @@ def build_job_postings_email_template(
 @app.post("/get-linkedin-jobs")
 def get_linkedin_jobs():
     """
-    Get all LinkedIn job postings from today that have poster profiles.
+    Get all job postings from high-volume posters (3+ jobs posted today).
     Send ONE email with a summary of all job postings.
     """
     # Query database for LinkedIn job postings
@@ -559,7 +563,7 @@ def get_linkedin_jobs():
     if not job_postings:
         return {
             "success": True,
-            "message": "No LinkedIn job postings found for today!",
+            "message": "No high-volume posters found today (no profiles with 3+ job postings)!",
             "jobs_count": 0,
             "email_sent": False
         }
@@ -568,7 +572,7 @@ def get_linkedin_jobs():
     excel_filepath = export_jobs_to_excel(job_postings)
     
     # Build email with all job postings information
-    subject = f"{APP_NAME}: {len(job_postings)} LinkedIn Job Posting(s) - {datetime.now().strftime('%Y-%m-%d')}"
+    subject = f"{APP_NAME}: {len(job_postings)} Job(s) from High-Volume Posters - {datetime.now().strftime('%Y-%m-%d')}"
     
     html = build_job_postings_email_template(
         app_name=APP_NAME,
@@ -594,7 +598,7 @@ def get_linkedin_jobs():
     
     return {
         "success": True,
-        "message": f"Found {len(job_postings)} LinkedIn job posting(s) - email sent with Excel report",
+        "message": f"Found {len(job_postings)} job posting(s) from high-volume posters - email sent with Excel report",
         "jobs_count": len(job_postings),
         "jobs": job_postings,
         "email_sent": True,
